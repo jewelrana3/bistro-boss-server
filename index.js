@@ -2,6 +2,7 @@ const express = require('express')
 const app = express('')
 require('dotenv').config()
 const jwt = require('jsonwebtoken');
+const stripe = require('stripe')(process.env.Payment_Api_Key)
 const cors = require('cors')
 const port = process.env.PORT || 4000;
 
@@ -12,6 +13,8 @@ app.use(express.json())
 
 const verifyJWT = (req, res, next) => {
   const authorization = req.headers.authorization;
+  console.log('auth',authorization)
+
   if (!authorization) {
     return res.status(401).send({ error: true, message: 'authorization not found' })
   }
@@ -64,7 +67,7 @@ async function run() {
     // user rated apis
     app.post('/jwt', (req, res) => {
       const id = req.body;
-      const token = jwt.sign(id, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '7d' })
+      const token = jwt.sign(id, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '8d' })
       res.send({ token })
     })
 
@@ -125,6 +128,26 @@ async function run() {
       const navItem = req.body;
       const result = await menuCollection.insertOne(navItem);
       res.send(result)
+    })
+
+    app.delete('/menu/:id',verifyJWT,verifyAdmin,async(req,res)=>{
+      const id = req.params.id;
+      const query = {_id: new ObjectId(id)}
+      const result = await menuCollection.deleteOne(query);
+      res.send(result)
+    })
+    // payment create
+    app.post('/payment-create',async(req,res)=>{
+      const {price} = req.body;
+      const amount = price*100;
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount:amount,
+        currency:'usd',
+        automatic_payment_methods:['card']
+      })
+      res.send({
+        clientSecret:paymentIntent.client_secret
+      })
     })
     // reviews apis
     app.get('/reviews', async (req, res) => {
