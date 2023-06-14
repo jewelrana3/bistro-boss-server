@@ -13,13 +13,13 @@ app.use(express.json())
 
 const verifyJWT = (req, res, next) => {
   const authorization = req.headers.authorization;
-  console.log('auth',authorization)
+
 
   if (!authorization) {
     return res.status(401).send({ error: true, message: 'authorization not found' })
   }
   const token = authorization.split(' ')[1]
-  
+
   jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
     if (err) {
       return res.status(403).send({ error: true, message: 'unauthorized access' })
@@ -63,6 +63,7 @@ async function run() {
     const menuCollection = client.db("bistroBossDB").collection("menu");
     const reviewCollection = client.db("bistroBossDB").collection("reviews");
     const cartCollection = client.db("bistroBossDB").collection("carts");
+    const paymentCollection = client.db("bistroBossDB").collection("payments");
 
     // user rated apis
     app.post('/jwt', (req, res) => {
@@ -71,7 +72,7 @@ async function run() {
       res.send({ token })
     })
 
-    app.get('/users', verifyJWT,verifyAdmin, async (req, res) => {
+    app.get('/users', verifyJWT, verifyAdmin, async (req, res) => {
       const result = await usersCollection.find().toArray()
       res.send(result)
     })
@@ -101,13 +102,12 @@ async function run() {
       const query = { email: email }
       const user = await usersCollection.findOne(query);
       const result = { admin: user?.role === 'admin' }
-      
+
       res.send(result)
     })
 
     app.patch('/users/admin/:id', async (req, res) => {
       const id = req.params.id;
-      console.log(id)
       const filter = { _id: new ObjectId(id) }
       const updateDoc = {
         $set: {
@@ -124,29 +124,68 @@ async function run() {
       res.send(result)
     })
 
-    app.post('/menu',verifyJWT,verifyAdmin,async(req,res)=>{
+    app.post('/menu', verifyJWT, verifyAdmin, async (req, res) => {
       const navItem = req.body;
       const result = await menuCollection.insertOne(navItem);
       res.send(result)
     })
 
-    app.delete('/menu/:id',verifyJWT,verifyAdmin,async(req,res)=>{
+    app.delete('/menu/:id', verifyJWT, verifyAdmin, async (req, res) => {
       const id = req.params.id;
-      const query = {_id: new ObjectId(id)}
+      const query = { _id: new ObjectId(id) }
       const result = await menuCollection.deleteOne(query);
       res.send(result)
     })
     // payment create
-    app.post('/payment-create',async(req,res)=>{
-      const {price} = req.body;
-      const amount = price*100;
+    app.post('/payment-create', verifyJWT, async (req, res) => {
+      const { price } = req.body;
+      const amount = parseInt(price * 100);
       const paymentIntent = await stripe.paymentIntents.create({
-        amount:amount,
-        currency:'usd',
-        automatic_payment_methods:['card']
+        amount: amount,
+        currency: 'usd',
+        payment_method_types: ['card']
       })
       res.send({
-        clientSecret:paymentIntent.client_secret
+        clientSecret: paymentIntent.client_secret
+      })
+    })
+
+    // payment api releted
+    app.post('/payments', async (req, res) => {
+      const payment = req.body;
+      const insertedResult = await paymentCollection.insertOne(payment)
+
+      const query = { _id: { $in: payment.cartItems.map(id => new ObjectId(id)) } };
+      const deleteResult = await cartCollection.deleteMany(query)
+
+      res.send({ insertedResult, deleteResult })
+
+    })
+
+    app.get('/admin-statas',verifyJWT,verifyAdmin, async (req, res) => {
+      const users = await usersCollection.estimatedDocumentCount();
+      const products = await menuCollection.estimatedDocumentCount();
+      const orders = await menuCollection.estimatedDocumentCount()
+
+      // best way to get sum of the price field is to use group and sum operator
+      /*
+        await paymentCollection.aggregate([
+          {
+            $group: {
+              _id: null,
+              total: { $sum: '$price' }
+            }
+          }
+        ]).toArray()
+      */
+
+        const payments = await paymentCollection.find().toArray()
+        const revenue = payments.reduce((sum,payment)=> sum + payment.price,0)
+      res.send({
+        revenue,
+        users,
+        products,
+        orders
       })
     })
     // reviews apis
@@ -167,12 +206,10 @@ async function run() {
       }
       const query = { email: email };
       const result = await cartCollection.find(query).toArray()
-      console.log(result)
       res.send(result)
     })
     app.post('/carts', async (req, res) => {
       const id = req.body;
-      console.log(id);
       const result = await cartCollection.insertOne(id);
       res.send(result)
     });
